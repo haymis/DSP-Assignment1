@@ -24,17 +24,19 @@ public class Mapper implements Runnable{
 	private String clientsQueueURL;
 	private ExecutorService mapperExecutor;
 	private ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft;
+	private ConcurrentHashMap<String, Integer> requiredWorkersPerTask;
 	private AtomicBoolean shouldTerminate;
 	private Logger logger;
 	private AWSCredentials credentials;
 	private int sleepTime = 10*1000;
+	private Object talkToTheBossLock;
 
 	public Mapper(String jobsQueueURL, String clientsQueueURL,
-			ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft,
-			AmazonSQSClient sqs, AmazonEC2 ec2, AtomicBoolean shouldTerminate, 
-			int numOfThreads, Logger logger, AWSCredentials credentials) {
+			ConcurrentHashMap<String, Integer> requiredWorkersPerTask,
+			ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft, AmazonSQSClient sqs, AmazonEC2 ec2, AtomicBoolean shouldTerminate, 
+			int numOfThreads, Logger logger, AWSCredentials credentials, Object talkToTheBossLock) {
 		this.jobsQueueURL = jobsQueueURL;
-		this.clientsQueueURL =clientsQueueURL;
+		this.clientsQueueURL = clientsQueueURL;
 		this.clientsUUIDToURLLeft = clientsUUIDToURLLeft;
 		this.sqs = sqs;
 		this.ec2 = ec2;
@@ -42,6 +44,8 @@ public class Mapper implements Runnable{
 		this.mapperExecutor = Executors.newFixedThreadPool(numOfThreads);
 		this.logger = logger;
 		this.credentials = credentials;
+		this.talkToTheBossLock = talkToTheBossLock;
+		this.requiredWorkersPerTask = requiredWorkersPerTask;
 		logger.info("[MAPPER] - Mapper Started");
 	}
 
@@ -98,7 +102,7 @@ public class Mapper implements Runnable{
 
         logger.info("[MAPPER] - Starting to handle new task from local app");
         Runnable taskHandler = new TaskHandler(clientsUUIDToURLLeft, msgAtrributes, logger,
-        		sqs, credentials, jobsQueueURL);
+        		sqs, credentials, jobsQueueURL, requiredWorkersPerTask, talkToTheBossLock);
         this.mapperExecutor.execute(taskHandler);
 
         logger.info("[MAPPER] - Finished creating task handler");

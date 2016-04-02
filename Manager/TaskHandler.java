@@ -35,26 +35,30 @@ import com.amazonaws.services.sqs.model.SendMessageRequest;
 public class TaskHandler implements Runnable {
 	private static AtomicInteger taskCounter = new AtomicInteger(0);
 	private static final int MAX_WORKERS = 20;
-	private Map<String, MessageAttributeValue> msgAtrributes;
+	private Map<String, MessageAttributeValue> msgAttributes;
 	private ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft;
 	private Logger logger;
 	private AmazonSQSClient sqs;
 	private AWSCredentials credentials;
 	private String jobsQueueURL;
 	private AmazonEC2 ec2;
+	private ConcurrentHashMap<String, Integer> requiredWorkersPerTask;
+	private Object talkToTheBossLock;
 	private int id;
 	
 	public TaskHandler(ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft,
 			Map<String, MessageAttributeValue> msgAtrributes, Logger logger, AmazonSQSClient sqs,
-			AWSCredentials credentials, String jobsQueueUrl){
+			AWSCredentials credentials, String jobsQueueUrl, ConcurrentHashMap<String, Integer> requiredWorkersPerTask, Object talkToTheBossLock){
 		this.clientsUUIDToURLLeft = clientsUUIDToURLLeft;
-		this.msgAtrributes = msgAtrributes;
+		this.msgAttributes = msgAtrributes;
         this.logger = logger;
         this.sqs = sqs;
         this.credentials = credentials;
         this.jobsQueueURL = jobsQueueUrl;
         this.id = taskCounter.getAndIncrement(); 
         this.ec2 = new AmazonEC2Client(credentials);
+        this.requiredWorkersPerTask = requiredWorkersPerTask;
+        this.talkToTheBossLock = talkToTheBossLock;
 		logger.info("===== Handler Log Started =====");
 	}
 	
@@ -64,16 +68,20 @@ public class TaskHandler implements Runnable {
 	
 	public void run() {
 		
-		String localAppUUID = this.msgAtrributes.get("UUID").getStringValue();
+		String localAppUUID = this.msgAttributes.get("UUID").getStringValue();
 		logInfo("Started running on uuid " + localAppUUID);
-		int numOfMessages = Integer.parseInt(this.msgAtrributes.get("NumOfURLs").getStringValue());
-		String inputFilePath = this.msgAtrributes.get("InputFilename").getStringValue();
-		String bucketName = this.msgAtrributes.get("BucketName").getStringValue();
-		int workersRatio = Integer.parseInt(this.msgAtrributes.get("WorkerPerMessage").getStringValue());
+		int numOfMessages = Integer.parseInt(this.msgAttributes.get("NumOfURLs").getStringValue());
+		String inputFilePath = this.msgAttributes.get("InputFilename").getStringValue();
+		String bucketName = this.msgAttributes.get("BucketName").getStringValue();
+		int workersRatio = Integer.parseInt(this.msgAttributes.get("WorkerPerMessage").getStringValue());
 		if(workersRatio == 0)
 			workersRatio = 30;  
 		int numOfWorkers = numOfMessages / workersRatio;
 				
+		this.requiredWorkersPerTask.put(localAppUUID, numOfWorkers);
+		synchronized(talkToTheBossLock){
+			talkToTheBossLock.notifyAll();
+		}
 		sqs.createQueue(new CreateQueueRequest("Responses-" + localAppUUID)).getQueueUrl();		
 		clientsUUIDToURLLeft.put(localAppUUID, numOfMessages);
 		//createWorkers(numOfWorkers);
@@ -82,8 +90,7 @@ public class TaskHandler implements Runnable {
 		} catch (IOException e) {
 			logger.info("[MapperTask] - couldn't read from file.");
 			e.printStackTrace();
-		}
-		
+		}		
 	}
 
 	private void createWorkers(int numOfWorkers) {
@@ -92,36 +99,12 @@ public class TaskHandler implements Runnable {
 		
         int absoluteToAdd = Integer.min(numOfWorkers - getNumOfCurrentWorkers(), MAX_WORKERS);
         if (absoluteToAdd <= 0) { // have enough workers.
-            logger.info("[MAPPER Task] - No more workers needed.");
+        	logger.info("[MAPPER Task] - No more workers needed.");
             return;
         }
         logInfo("Creating " + absoluteToAdd + " new workers");
-
-        RunInstancesRequest runWorkerRequest = new RunInstancesRequest("ami-b66ed3de", absoluteToAdd, absoluteToAdd);
-        runWorkerRequest.setKeyName("nirhaymi");
-        runWorkerRequest.setInstanceType(InstanceType.T2Micro.toString());
-
-        // Bootstrapping the new Worker instance
-//            try {
-//                runWorkerRequest.setUserData(getBootStrapScript("/tmp/worker_bootstrap.sh"));
-//            } catch (IOException e) {
-//            	logger.info("[MAPPER Task] - Cannot find bootstrap file or failed in getBootStrapScript");
-//                e.printStackTrace();                
-//            }
-        List<Instance> instances = ec2.runInstances(runWorkerRequest).getReservation().getInstances();
-        if (instances.size() != absoluteToAdd)
-        	logInfo("Couldn't create required amount of workers. Created " + instances.size() + " instead of " + absoluteToAdd);
+        WorkerInstanceData.getWorkers(absoluteToAdd, ec2);
         
-        for (int i=0; i < instances.size(); i++) {
-            String workerID = instances.get(i).getInstanceId();
-            //this.workerInstancesIds.add(workerID);
-
-            // Creating tags for workers instances
-            CreateTagsRequest createTagsRequest = new CreateTagsRequest().withResources(workerID)
-                    .withTags(new Tag("Type", "Worker"), new Tag("ID", workerID));
-            ec2.createTags(createTagsRequest);
-        }
-
         logger.info("[MAPPER Task] - Workers added.");
 		
 	}

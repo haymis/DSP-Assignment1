@@ -63,7 +63,7 @@ public class LocalApplication {
 	private static String s3Path = "https://%s.s3.amazonaws.com/%s";
 	
 	public static void main(String[] args){
-		WorkerRatio = 50;
+		WorkerRatio = 100;
 		tweetsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\tweetLinks.txt";
 		//tweetsHtmlPath = args[1];
 		uuid = UUID.randomUUID();

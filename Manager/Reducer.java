@@ -18,9 +18,11 @@ public class Reducer implements Runnable{
 	private AtomicBoolean shouldTerminate;
 	private Logger logger;
 	private AWSCredentials credentials;
+	private Object talkToTheBossLock;
 	
 	public Reducer(String jobDoneAckQueue, ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft,
-			AmazonSQSClient sqs, AtomicBoolean shouldTerminate, int numOfThreads, Logger logger, AWSCredentials credentials) {
+			AmazonSQSClient sqs, AtomicBoolean shouldTerminate, int numOfThreads, Logger logger, AWSCredentials credentials,
+			Object talkToTheBossLock) {
 		this.jobDoneAckQueue = jobDoneAckQueue;
 		this.clientsUUIDToURLLeft = clientsUUIDToURLLeft;
 		this.sqs = sqs;
@@ -28,6 +30,7 @@ public class Reducer implements Runnable{
 		this.reducerExecutor = Executors.newFixedThreadPool(numOfThreads);
 		this.logger = logger;
 		this.credentials = credentials;
+		this.talkToTheBossLock = talkToTheBossLock;
 		logger.info("Reducer Started");
 	}
 

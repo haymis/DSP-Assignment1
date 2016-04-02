@@ -23,6 +23,7 @@ import org.jsoup.nodes.Document;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.PropertiesCredentials;
 import com.amazonaws.services.sqs.AmazonSQSClient;
+import com.amazonaws.services.sqs.model.CreateQueueRequest;
 import com.amazonaws.services.sqs.model.DeleteMessageRequest;
 import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.MessageAttributeValue;
@@ -56,8 +57,8 @@ public class Worker {
 	private static String logFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\workerlog"+uuid.toString()+".txt";//"/tmp/workerLog.txt"\
 	private static String credentialsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\rootkey.properties"; 
 	private static String jobsQueueURL;
-	private static String managerWorkersQueue;
-	
+	private static String managerWorkersQueueURL;
+	private static String jobDoneAckQueueURL;	
 	/*
 	 * returns the tweet fetched from the given url
 	 */
@@ -159,7 +160,8 @@ public class Worker {
 		credentials = new PropertiesCredentials(new FileInputStream(credentialsFilePath));
 		sqs = new AmazonSQSClient(credentials);
 		jobsQueueURL =  sqs.getQueueUrl("JobQueueQueue").getQueueUrl();
-		
+		managerWorkersQueueURL = sqs.getQueueUrl("ManagerWorkersQueue").getQueueUrl();
+		jobDoneAckQueueURL = sqs.getQueueUrl("jobDoneAckQueue").getQueueUrl();
 		logInfo("start working:");
 		work();
 	}
@@ -171,7 +173,9 @@ public class Worker {
 		boolean shouldWork = true;
 		while(shouldWork){
 			if(hasTerminateMsg()){
-				terminate();
+				logInfo("Should Terminate");
+				shouldWork = false;
+				break;
 			}
 			result = getMsgFromQueue(jobsQueueURL, "All", 1);
 	        messages = result.getMessages();
@@ -208,13 +212,27 @@ public class Worker {
 	        	
 	    		sendResponse(tweetResponse, localAppUUID, responseQueueURL);
 	    		sqs.deleteMessage(new DeleteMessageRequest(jobsQueueURL, receipt));
+	    		
+	    		sendResponse(localAppUUID, jobDoneAckQueueURL);
 	        }          	
 		}
+		terminate();
 	}
-	//HEREs
+	private static void terminate() {
+		//TODO: finish this func...
+		logInfo("Terminating instance\n"
+				+ "in future - send back the logs and stats...");
+	}
+
 	private static boolean hasTerminateMsg() {
-		ReceiveMessageResult result = getMsgFromQueue(managerWorkersQueue, "Terminate-" + uuid.toString(), 1);
-		return false;
+		logInfo("Checking for termination");
+		ReceiveMessageResult result = getMsgFromQueue(managerWorkersQueueURL, "Terminate", 1);
+		if(result.getMessages().isEmpty())
+			return false;
+		logInfo("I Should terminate. deleting termination msg");
+		String receipt = result.getMessages().get(0).getReceiptHandle();
+		sqs.deleteMessage(new DeleteMessageRequest(managerWorkersQueueURL, receipt));
+		return true;
 	}
 
 	private static ReceiveMessageResult getMsgFromQueue(String queueURL,
@@ -238,6 +256,11 @@ public class Worker {
 		Map<String, MessageAttributeValue> attributes = new HashMap<String, MessageAttributeValue>();
         attributes.put("UUID", new MessageAttributeValue().withDataType("String").withStringValue(uuid));
         attributes.put("result", new MessageAttributeValue().withDataType("String").withStringValue(response));
+        sqs.sendMessage(new SendMessageRequest().withQueueUrl(queueURL).withMessageBody("New Result :)").withMessageAttributes(attributes));
+	}
+	private static void sendResponse(String uuid, String queueURL){
+		Map<String, MessageAttributeValue> attributes = new HashMap<String, MessageAttributeValue>();
+        attributes.put("UUID", new MessageAttributeValue().withDataType("String").withStringValue(uuid));
         sqs.sendMessage(new SendMessageRequest().withQueueUrl(queueURL).withMessageBody("New Result :)").withMessageAttributes(attributes));
 	}
 	
