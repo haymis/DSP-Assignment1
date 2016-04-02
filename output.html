@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Tweets Analysis</title>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.0/jquery.min.js"></script>
+  <script src="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>
+</head>
+<body>
+<script>
+
+(function (){
+	function parseJson (JsonArray) {
+		for(var i=0;i<JsonArray.length; i++){
+		    var obj = JsonArray[i];
+		    document.write("<h1 style=\"color: " + sentimentToColor(obj.sentiment) +";\">" 
+		    	+ obj.tweet +"</h1>\n" + "<h2 style=\"color:grey\">Sentiment: " + obj.sentiment 
+		    	+ "</h2>\n");
+		    var entitiesArray = obj.entities;
+		    if (entitiesArray.length > 0){
+		    	document.write("<h2 style=\"color:grey\">Entities:</h2>\n<ul>\n");
+			    for (var j=0; j<entitiesArray.length; j++){
+			    	document.write("<li><a href=\"" + entitiesArray[j].wiki_url
+			    		+ "\" data-toggle=\"tooltip\" data-placement=\"right\"" + 
+			    		" title=\"" + entitiesArray[j].google_name + "\">" 
+			    		+ entitiesArray[j].entity_name + "</a></li>\n");
+			    }
+		    }
+		    else {
+				document.write("<h2 style=\"color:grey\">No Entities!</h2>\n");
+		    }
+		    document.write("</ul>\n<hr />");
+		}
+	}
+
+	function sentimentToColor(sentiment){
+		var colors = ['#8C0000', 'red', 'black', '#66FF65', '#238423' ];
+		return colors[sentiment];
+	}
+
+
+
+	var js = 
+
+	$$PASTE_JSON_DATA_HERE$$
+
+	;
+
+	parseJson(js);
+}
+)();
+
+</script>

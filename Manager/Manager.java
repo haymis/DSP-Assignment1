@@ -41,7 +41,7 @@ public class Manager {
 	private static Object talkToTheBossLock;
 	private static AtomicBoolean shouldTerminate;
 //	private static String myInstanceID;
-	private static String jobDoneAckQueue;
+	private static String jobDoneAckQueueURL;
 	private static String managerWorkersQueue;
 	private static String clientsQueueURL;
 	private static String jobsQueueURL;
@@ -84,8 +84,8 @@ public class Manager {
         Runnable mapper = new Mapper(jobsQueueURL, clientsQueueURL, requiredWorkersPerTask,
         		clientsUUIDToURLLeft, sqs, ec2, shouldTerminate, mapperNumOfThreads,
         		logger, credentials, talkToTheBossLock);
-        Runnable reducer = new Reducer(jobDoneAckQueue, clientsUUIDToURLLeft,
-        		sqs, shouldTerminate, reducerNumOfThreads, logger, credentials, talkToTheBossLock);
+        Runnable reducer = new Reducer(jobDoneAckQueueURL, clientsUUIDToURLLeft, sqs,
+        		shouldTerminate, reducerNumOfThreads, logger, credentials, talkToTheBossLock, requiredWorkersPerTask);
         
         Thread mapperThread = new Thread(mapper);
         Thread reducerThread = new Thread(reducer);
@@ -178,7 +178,7 @@ public class Manager {
         sqs = new AmazonSQSClient(credentials);
         clientsQueueURL = sqs.getQueueUrl("ClientsQueue").getQueueUrl();
         jobsQueueURL = sqs.createQueue(new CreateQueueRequest("JobQueueQueue")).getQueueUrl();
-        jobDoneAckQueue = sqs.createQueue(new CreateQueueRequest("jobDoneAckQueue")).getQueueUrl();
+        jobDoneAckQueueURL = sqs.createQueue(new CreateQueueRequest("jobDoneAckQueue")).getQueueUrl();
         managerWorkersQueue = sqs.createQueue(new CreateQueueRequest("ManagerWorkersQueue")).getQueueUrl();
         logger.info("[MANAGER] - Queues initialized");
     }

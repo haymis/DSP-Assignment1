@@ -131,7 +131,8 @@ public class Worker {
 	}
 
 	public static void logInfo(String msg){
-		logger.info("[WORKER] - " + msg);
+		//logger.info("[WORKER] - " + msg);
+		return;
 	}
 	
 	public static void main(String[] args) throws IOException {
@@ -312,13 +313,13 @@ public class Worker {
 				result = (JSONObject) result.get("result");
 				if(!result.containsKey("name") || !result.containsKey("detailedDescription"))
 					continue;
-				JsonEntity.put("google-name", (String) result.get("name"));
+				JsonEntity.put("google_name", (String) result.get("name"));
 				result = (JSONObject) result.get("detailedDescription");
 				if(!result.containsKey("url"))
 					continue;
-				JsonEntity.put("wiki-url", (String) result.get("url"));
+				JsonEntity.put("wiki_url", (String) result.get("url"));
 			}
-			JsonEntity.put("entity-name", entity);
+			JsonEntity.put("entity_name", entity);
 			JsonEntities.add(JsonEntity);
 		}
 		JsonTweet.put("entities", JsonEntities);

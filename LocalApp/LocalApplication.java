@@ -5,6 +5,8 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -32,11 +34,16 @@ import com.amazonaws.services.ec2.model.Tag;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.model.CannedAccessControlList;
+import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
+import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.CreateQueueRequest;
+import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.MessageAttributeValue;
 import com.amazonaws.services.sqs.model.QueueDoesNotExistException;
+import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
+import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import com.amazonaws.services.sqs.model.SendMessageRequest;
 
 
@@ -61,10 +68,11 @@ public class LocalApplication {
 	private static String mySummaryQueueURL;
 	private static String jobsQueueURL;
 	private static String s3Path = "https://%s.s3.amazonaws.com/%s";
+	private static long sleepTime = 20 * 1000;
 	
 	public static void main(String[] args){
 		WorkerRatio = 100;
-		tweetsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\tweetLinks.txt";
+		tweetsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\tweetLinks1.txt";
 		//tweetsHtmlPath = args[1];
 		uuid = UUID.randomUUID();
 		try {
@@ -77,11 +85,67 @@ public class LocalApplication {
 		runManagerInstance();
 		uploadToS3();
 		sendMessageToSQS();
-//		waitForResponse();
-//		handleResponse();
-		
-		
-		
+		Message response = waitForResponse();
+		handleResponse(response);
+	}
+	
+	private static void handleResponse(Message response) {
+		String bucket = response.getMessageAttributes().get("BucketName").getStringValue();
+		String filename = response.getMessageAttributes().get("OutputFilename").getStringValue();
+		try {
+			downloadInputFileFromS3(bucket, filename);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	
+	private static void downloadInputFileFromS3(String bucketName, String inputFilePath) throws IOException {
+
+        System.out.println("Downloading input file");
+        AmazonS3 s3 = new AmazonS3Client(credentials);
+        S3Object inputFile = s3.getObject(new GetObjectRequest(bucketName, inputFilePath));
+        
+        InputStream inputFileData = inputFile.getObjectContent();
+        System.out.println("Done Downloading input file");
+             
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputFileData));
+        String nextLine;
+        System.out.println("Printing file.");
+        while ((nextLine = reader.readLine()) != null) {
+            System.out.println(nextLine);
+        }
+        System.out.println("Done Printing file.");
+
+        inputFileData.close();
+    }
+	
+	private static Message waitForResponse(){
+		ReceiveMessageResult result;
+        List<Message> messages;
+        
+	    do
+        {
+            result = sqs.receiveMessage(
+            			new ReceiveMessageRequest()
+            			.withQueueUrl("Request-" + uuid.toString())
+            			.withMessageAttributeNames("All")
+            			.withMaxNumberOfMessages(1)
+            		);
+            messages = result.getMessages();	            
+            
+            if (messages.isEmpty()) {
+            	System.out.println("Waiting for my response, sleeping "+ (sleepTime / 1000) +" second");
+	            try {
+	                Thread.sleep(sleepTime );
+	            } catch (InterruptedException e) {
+	                e.printStackTrace();
+	            }
+            }
+
+        } while (messages.isEmpty());
+		System.out.println("Got Response!");
+	    return messages.get(0);
 	}
 	
     private static void sendMessageToSQS() {

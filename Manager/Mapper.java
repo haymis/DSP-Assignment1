@@ -101,7 +101,7 @@ public class Mapper implements Runnable{
 	private void handleNewTask(Map<String, MessageAttributeValue> msgAtrributes) {
 
         logger.info("[MAPPER] - Starting to handle new task from local app");
-        Runnable taskHandler = new TaskHandler(clientsUUIDToURLLeft, msgAtrributes, logger,
+        Runnable taskHandler = new MapperTaskHandler(clientsUUIDToURLLeft, msgAtrributes, logger,
         		sqs, credentials, jobsQueueURL, requiredWorkersPerTask, talkToTheBossLock);
         this.mapperExecutor.execute(taskHandler);
 
