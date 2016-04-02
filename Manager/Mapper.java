@@ -27,11 +27,11 @@ public class Mapper implements Runnable{
 	private AtomicBoolean shouldTerminate;
 	private Logger logger;
 	private AWSCredentials credentials;
-	private int sleepTime = 1000;
+	private int sleepTime = 10*1000;
 
-	public Mapper(String jobsQueueURL2, String clientsQueueURL2,
+	public Mapper(String jobsQueueURL, String clientsQueueURL,
 			ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft,
-			AmazonSQSClient sqs2, AmazonEC2 ec2, AtomicBoolean shouldTerminate2, 
+			AmazonSQSClient sqs, AmazonEC2 ec2, AtomicBoolean shouldTerminate, 
 			int numOfThreads, Logger logger, AWSCredentials credentials) {
 		this.jobsQueueURL = jobsQueueURL;
 		this.clientsQueueURL =clientsQueueURL;
@@ -57,14 +57,15 @@ public class Mapper implements Runnable{
 	            			.withQueueUrl(clientsQueueURL)
 	            			.withMessageAttributeNames("All")
 	            		);
-	            messages = result.getMessages();
-
-	            logger.info("[MAPPER] - Waiting for messages, sleeping "+ (this.sleepTime / 1000) +" second");
+	            messages = result.getMessages();	            
 	            
-	            try {
-	                Thread.sleep(sleepTime);
-	            } catch (InterruptedException e) {
-	                e.printStackTrace();
+	            if (messages.isEmpty()) {
+	            	logger.info("[MAPPER] - Waiting for messages, sleeping "+ (this.sleepTime / 1000) +" second");
+		            try {
+		                Thread.sleep(sleepTime);
+		            } catch (InterruptedException e) {
+		                e.printStackTrace();
+		            }
 	            }
 
 	        } while (messages.isEmpty());
@@ -73,9 +74,11 @@ public class Mapper implements Runnable{
 	        logger.info("[MAPPER] - New messages arrived from local app! Handling");
 
 	        for (Message message: messages) {
+	        	logger.info("[MAPPER] - got message " + message);
 	            String receipt = message.getReceiptHandle();
 	            Map<String, MessageAttributeValue> msgAttributes = message.getMessageAttributes();
-	            if (msgAttributes.containsKey("Num-of-URLs")){
+	            if (msgAttributes.containsKey("NumOfURLs")){
+	            	logger.info("[MAPPER] - deleting message from clients queue " + receipt);
 	                handleNewTask(msgAttributes);
 	                sqs.deleteMessage(new DeleteMessageRequest(clientsQueueURL, receipt));
 	            }
@@ -96,9 +99,9 @@ public class Mapper implements Runnable{
         logger.info("[MAPPER] - Starting to handle new task from local app");
         Runnable taskHandler = new TaskHandler(clientsUUIDToURLLeft, msgAtrributes, logger,
         		sqs, credentials, jobsQueueURL);
-        this.mapperExecutor .execute(taskHandler);
+        this.mapperExecutor.execute(taskHandler);
 
-        logger.info("Manager :: Finished creating task handler");
+        logger.info("[MAPPER] - Finished creating task handler");
 
     }
 

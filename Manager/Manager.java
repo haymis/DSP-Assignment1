@@ -31,12 +31,15 @@ public class Manager {
 	private static String jobsQueueURL;
 	private static int mapperNumOfThreads = 3;
 	private static int reducerNumOfThreads = 3;
-
+	//private static String credentialsFilePath = "/tmp/rootkey.properties";
+	private static String credentialsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\rootkey.properties";
+	private static String logFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\managerLog.txt"; //"/tmp/managerLog.log";
+	
 	public static void main(String[] args) {
 		shouldTerminate = new AtomicBoolean(false);
 		FileHandler fh;
         try {
-            fh = new FileHandler("/tmp/managerLog.log");
+            fh = new FileHandler(logFilePath);
             logger.addHandler(fh);
             SimpleFormatter formatter = new SimpleFormatter();
             fh.setFormatter(formatter);
@@ -63,8 +66,11 @@ public class Manager {
         Runnable reducer = new Reducer(jobDoneAckQueue, clientsUUIDToURLLeft,
         		sqs, shouldTerminate, reducerNumOfThreads, logger, credentials);
         
-        mapper.run();
-        reducer.run();
+        Thread mapperThread = new Thread(mapper);
+        Thread reducerThread = new Thread(reducer);
+        
+        mapperThread.start();
+        reducerThread.start();
         
         while(!shouldTerminate.get()){
         	synchronized(shouldTerminate){
@@ -79,19 +85,19 @@ public class Manager {
     }
 		
 	private static void initEC2Client() throws IOException {
-        logger.info("Manager :: Starting to init ec2 client ");
-        credentials = new PropertiesCredentials(new FileInputStream("/tmp/rootkey.properties"));
+        logger.info("[MANAGER] - Starting to init ec2 client ");
+        credentials = new PropertiesCredentials(new FileInputStream(credentialsFilePath));        
         ec2 = new AmazonEC2Client(credentials);
-        logger.info("Manager :: EC2 Client initialized.");
+        logger.info("[MANAGER] - EC2 Client initialized.");
     }
 
     private static void initSQSQueues() {
-        logger.info("Manager :: Starting to init queues");
+        logger.info("[MANAGER] - Starting to init queues");
         sqs = new AmazonSQSClient(credentials);
-        clientsQueueURL = sqs.getQueueUrl("InformationQueue").getQueueUrl();
+        clientsQueueURL = sqs.getQueueUrl("ClientsQueue").getQueueUrl();
         jobsQueueURL = sqs.createQueue(new CreateQueueRequest("JobQueueQueue")).getQueueUrl();
         jobDoneAckQueue = sqs.createQueue(new CreateQueueRequest("JobDoneAckQueue")).getQueueUrl();
-        logger.info("Manager :: Queues initialized");
+        logger.info("[MANAGER] - Queues initialized");
     }
 }
 

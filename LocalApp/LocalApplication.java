@@ -49,7 +49,7 @@ public class LocalApplication {
     private static UUID uuid;
     
     // Number of messages per worker.
-    private static int n;
+    private static int WorkerRatio;
     private static boolean terminate = false;
     private static String managerInstanceId;
     private static AmazonEC2 ec2;
@@ -63,7 +63,7 @@ public class LocalApplication {
 	private static String s3Path = "https://%s.s3.amazonaws.com/%s";
 	
 	public static void main(String[] args){
-		
+		WorkerRatio = 50;
 		tweetsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\tweetLinks.txt";
 		//tweetsHtmlPath = args[1];
 		uuid = UUID.randomUUID();
@@ -96,7 +96,7 @@ public class LocalApplication {
         attributes.put("BucketName", new MessageAttributeValue().withDataType("String").withStringValue(bucketName));
         attributes.put("InputFilename", new MessageAttributeValue().withDataType("String").withStringValue(inputFileName));
         attributes.put("UUID", new MessageAttributeValue().withDataType("String").withStringValue(String.valueOf(uuid)));
-        attributes.put("WorkerPerMessage", new MessageAttributeValue().withDataType("Number").withStringValue(String.valueOf(n)));
+        attributes.put("WorkerPerMessage", new MessageAttributeValue().withDataType("Number").withStringValue(String.valueOf(WorkerRatio)));
         attributes.put("NumOfURLs", new MessageAttributeValue().withDataType("Number").withStringValue(String.valueOf(tweetsAmount())));
 
         //Creating the Manager-LocalApp Queue
@@ -106,7 +106,7 @@ public class LocalApplication {
         System.out.println("ClientsQueue created ");
 
         //Creating the unique LocalApp Queue
-        createQueueRequest = new CreateQueueRequest().withQueueName(uuid.toString());
+        createQueueRequest = new CreateQueueRequest().withQueueName("Request-" + uuid.toString());
         mySummaryQueueURL = sqs.createQueue(createQueueRequest).getQueueUrl();
 
         System.out.println("Personal localapp queue created.");
@@ -193,7 +193,7 @@ public class LocalApplication {
         else { // Manager doesn't exist.
             RunInstancesRequest runManagerRequest = new RunInstancesRequest("ami-b66ed3de", 1, 1);
             runManagerRequest.setInstanceType(InstanceType.T2Micro.toString());
-            runManagerRequest.setUserData(fileToBase64String("C:\\Users\\Haymi\\Documents\\BGU\\DSP\\bootstart.sh"));
+            //runManagerRequest.setUserData(fileToBase64String("C:\\Users\\Haymi\\Documents\\BGU\\DSP\\bootstart.sh"));
             runManagerRequest.setKeyName("nirhaymi");
             managerInstance = ec2.runInstances(runManagerRequest).getReservation().getInstances().get(0);
             managerInstanceId = managerInstance.getInstanceId();
