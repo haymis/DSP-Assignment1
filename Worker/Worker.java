@@ -47,7 +47,7 @@ import edu.stanford.nlp.util.CoreMap;
 public class Worker {
 
 	public static String[] tweets = { "https://www.twitter.com/BarackObama/status/710517154987122689"};
-	private static String APIUrl = "https://kgsearch.googleapis.com/v1/entities:search?key=AIzaSyBA0QFiW2iZtNmhrwf-YRRQSVimKA8Y8G8&query=";
+	private static String APIUrl = "https://kgsearch.googleapis.com/v1/entities:search?key=AIzaSyBA0QFiW2iZtNmhrwf-YRRQSVimKA8Y8G8&limit=1&query=";
 	static StanfordCoreNLP sentimentPipeline;
 	static StanfordCoreNLP EntitiesPipeline;
 	private static UUID uuid = UUID.randomUUID();
@@ -59,6 +59,7 @@ public class Worker {
 	private static String jobsQueueURL;
 	private static String managerWorkersQueueURL;
 	private static String jobDoneAckQueueURL;	
+	private static String[] KnowladgeAPITypes = {"", "Person", "Organization", "Location"};
 	/*
 	 * returns the tweet fetched from the given url
 	 */
@@ -291,8 +292,10 @@ public class Worker {
 
 			String desc = null;
 			String wikiUrl = null;
-
-			String jsonResponse = getKnowladge(entity);
+			String jsonResponse= getKnowladge(entity, entities.get(entity).equals("PERSON") ? 1 
+													: (entities.get(entity).equals("ORGANIZATION") ? 2 
+													: (entities.get(entity).equals("LOCATION") ? 3
+													: 0 ));
 			if(jsonResponse == null)
 				continue;
 			
@@ -302,6 +305,11 @@ public class Worker {
 			JSONObject KnowladgeJson = (JSONObject) KnowladgeObj;
 			JSONArray results = (JSONArray) KnowladgeJson.get("itemListElement");
 			
+			if (results.size() == 0){
+				logInfo("No results for '" + entity + "' from the Knowladge API.");
+				continue;
+			}
+
 			Iterator<JSONObject> iterator = results.iterator();
 			// get top result:
 			if (iterator.hasNext()) {
@@ -327,8 +335,13 @@ public class Worker {
 
 	}
 
-	private static String getKnowladge(String entity) throws IOException {
-		Response response = Jsoup.connect(APIUrl + entity).ignoreContentType(true).execute();
+	private static String getKnowladge(String entity, int type) throws IOException {
+		StringBuilder sb = new StringBuilder();
+		sb.append(APIUrl);
+		sb.append(entity);
+		sb.append("&types=");
+		sb.append(KnowladgeAPITypes[type]);
+		Response response = Jsoup.connect(sb.toString()).ignoreContentType(true).execute();
 		if(response.statusCode() != 200)
 			return null;
 		return response.body();
