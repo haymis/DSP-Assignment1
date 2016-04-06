@@ -1,12 +1,18 @@
-package LocalApp;
+package ass1;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.UnsupportedEncodingException;
+import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -73,6 +79,7 @@ public class LocalApplication {
 	public static void main(String[] args){
 		WorkerRatio = 100;
 		tweetsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\tweetLinks1.txt";
+		tweetsHtmlPath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\ParsedTweets.html";
 		//tweetsHtmlPath = args[1];
 		uuid = UUID.randomUUID();
 		try {
@@ -92,32 +99,30 @@ public class LocalApplication {
 	private static void handleResponse(Message response) {
 		String bucket = response.getMessageAttributes().get("BucketName").getStringValue();
 		String filename = response.getMessageAttributes().get("OutputFilename").getStringValue();
+		S3Object inputFile = null;
 		try {
-			downloadInputFileFromS3(bucket, filename);
+			inputFile = downloadInputFileFromS3(bucket, filename);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		if (inputFile == null){
+			System.out.println("Error getting result file from S3 (" + filename + ").");
+			return;
+		}
+		try {
+			HTMLFileCreator.CreateHTMLFromResponse(inputFile, tweetsHtmlPath);
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 	}
-	
-	private static void downloadInputFileFromS3(String bucketName, String inputFilePath) throws IOException {
 
-        System.out.println("Downloading input file");
-        AmazonS3 s3 = new AmazonS3Client(credentials);
+	private static S3Object downloadInputFileFromS3(String bucketName, String inputFilePath) throws IOException {
+		System.out.println("Downloading input file");
+		AmazonS3 s3 = new AmazonS3Client(credentials);
         S3Object inputFile = s3.getObject(new GetObjectRequest(bucketName, inputFilePath));
-        
-        InputStream inputFileData = inputFile.getObjectContent();
-        System.out.println("Done Downloading input file");
-             
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputFileData));
-        String nextLine;
-        System.out.println("Printing file.");
-        while ((nextLine = reader.readLine()) != null) {
-            System.out.println(nextLine);
-        }
-        System.out.println("Done Printing file.");
-
-        inputFileData.close();
+        return inputFile;
     }
 	
 	private static Message waitForResponse(){
@@ -333,5 +338,6 @@ public class LocalApplication {
 		System.out.println("Response is " + response + " and key is " + key);
 		System.out.println("Returning " + InstanceStatesDictionary.instanceStatesDictionary.get(key));
 		return InstanceStatesDictionary.instanceStatesDictionary.get(key);
-	}	
+	}
 }
+
