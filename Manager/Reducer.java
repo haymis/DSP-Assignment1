@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
@@ -28,10 +29,13 @@ public class Reducer implements Runnable{
 	private int sleepTime = 5*1000;
 	private Object talkToTheBossLock;
 	private ConcurrentHashMap<String, Integer> clientsUUIDToNumOfWorkers;
+	private AtomicBoolean reducerDone;
+	private AtomicBoolean mapperDone;
 	
 	public Reducer(String jobDoneAckQueueURL, ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft,
 			AmazonSQSClient sqs, AtomicBoolean shouldTerminate, int numOfThreads, Logger logger, AWSCredentials credentials,
-			Object talkToTheBossLock, ConcurrentHashMap<String, Integer> requiredWorkersPerTask) {
+			Object talkToTheBossLock, ConcurrentHashMap<String, Integer> requiredWorkersPerTask, AtomicBoolean mapperDone,
+			AtomicBoolean reducerDone) {
 		this.jobDoneAckQueueURL = jobDoneAckQueueURL;
 		this.clientsUUIDToURLLeft = clientsUUIDToURLLeft;
 		this.sqs = sqs;
@@ -41,6 +45,8 @@ public class Reducer implements Runnable{
 		this.credentials = credentials;
 		this.talkToTheBossLock = talkToTheBossLock;
 		this.clientsUUIDToNumOfWorkers = requiredWorkersPerTask;
+		this.reducerDone = reducerDone;
+		this.mapperDone = mapperDone;
 		logger.info("Reducer Started");
 	}
 	
@@ -52,7 +58,7 @@ public class Reducer implements Runnable{
 		ReceiveMessageResult result;
         List<Message> messages;
         
-		while(!shouldTerminate.get() || !clientsUUIDToURLLeft.isEmpty()){
+		while(!mapperDone.get() || !clientsUUIDToURLLeft.isEmpty()){
 		    do
 	        {
 	            result = sqs.receiveMessage(
@@ -96,6 +102,24 @@ public class Reducer implements Runnable{
 	                }
 	            }
 	        }
+		}
+		terminate();
+	}
+
+	private void terminate() {
+		reducerExecutor.shutdown();
+		try {
+			while (!reducerExecutor.awaitTermination(60, TimeUnit.SECONDS))
+				logInfo("Awaiting completion of reducer tasks.");
+			
+		} catch (InterruptedException e) {
+			logInfo("Got interrupted while waiting for tasks to complete. shutting down :(");
+			e.printStackTrace();
+		}
+		logInfo("Done waiting. Exiting...");
+		reducerDone.set(true);
+		synchronized(talkToTheBossLock){
+			talkToTheBossLock.notifyAll();
 		}
 	}
 

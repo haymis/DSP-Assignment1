@@ -47,10 +47,10 @@ public class MapperTaskHandler implements Runnable {
 	private int id;
 	
 	public MapperTaskHandler(ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft,
-			Map<String, MessageAttributeValue> msgAtrributes, Logger logger, AmazonSQSClient sqs,
+			Map<String, MessageAttributeValue> msgAttributes, Logger logger, AmazonSQSClient sqs,
 			AWSCredentials credentials, String jobsQueueUrl, ConcurrentHashMap<String, Integer> requiredWorkersPerTask, Object talkToTheBossLock){
 		this.clientsUUIDToURLLeft = clientsUUIDToURLLeft;
-		this.msgAttributes = msgAtrributes;
+		this.msgAttributes = msgAttributes;
         this.logger = logger;
         this.sqs = sqs;
         this.credentials = credentials;

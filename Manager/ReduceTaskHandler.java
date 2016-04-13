@@ -108,6 +108,7 @@ public class ReduceTaskHandler implements Runnable {
 		}
 		uploadToS3(file);
 		sendMessageToSQS();
+		sqs.deleteQueue("Responses-" + localAppUUID);
 	}
 	private void sendMessageToSQS() {
 		logInfo("Sending message to the Local App's queue that response is ready, and the file path.");

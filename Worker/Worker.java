@@ -1,5 +1,6 @@
 package Worker;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.StringReader;
@@ -16,14 +17,18 @@ import java.util.logging.SimpleFormatter;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import org.jsoup.Connection.Response;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.PropertiesCredentials;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.CannedAccessControlList;
+import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.sqs.AmazonSQSClient;
-import com.amazonaws.services.sqs.model.CreateQueueRequest;
 import com.amazonaws.services.sqs.model.DeleteMessageRequest;
 import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.MessageAttributeValue;
@@ -55,16 +60,32 @@ public class Worker {
 	private static AWSCredentials credentials;
 	private static Logger logger = Logger.getLogger("Worker Logger");
 	private static String logFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\workerlog"+uuid.toString()+".txt";//"/tmp/workerLog.txt"\
+	private static String logFileName = "workerlog"+uuid.toString()+".txt";
 	private static String credentialsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\rootkey.properties"; 
 	private static String jobsQueueURL;
 	private static String managerWorkersQueueURL;
-	private static String jobDoneAckQueueURL;	
-	private static String[] KnowladgeAPITypes = {"", "Person", "Organization", "Location"};
+	private static String jobDoneAckQueueURL;
+	private static String workersStatsQueueURL;
+	private static String[] KnowladgeAPITypes = {"", "Person", "Organization", "Place"};
+	private static int waitForNewMsgesTime = 500;
+	private static int receiveCountLimit = 3;
+	private static int numOfSuccessfulTweets = 0; 
+	private static int numOfFailedTweets = 0;
+	private static long startTime = 0;
+	private static double avgRuntimePerSuccessfulMessage = 0;
+	private static double avgRuntimePerFailedMessage = 0;
+	private static String bucketName = "hayminirhodadi";
+	private static FileHandler logFileHandler;
 	/*
 	 * returns the tweet fetched from the given url
 	 */
-	public static String getTweet(String url) throws IOException {
-		Document doc = Jsoup.connect(url).get();
+	public static String getTweet(String url) throws BadURLException{
+		Document doc;
+		try {
+			doc = Jsoup.connect(url).get();
+		} catch (IOException e) {
+			throw new BadURLException(e);
+		}
 		return doc.title().split("\"")[1];
 	}
 
@@ -132,17 +153,18 @@ public class Worker {
 	}
 
 	public static void logInfo(String msg){
-		//logger.info("[WORKER] - " + msg);
+		logger.info("[WORKER] - " + msg);
 		return;
 	}
 	
 	public static void main(String[] args) throws IOException {
-		FileHandler fh;
+		startTime = System.currentTimeMillis();
+		
 		try {
-	        fh = new FileHandler(logFilePath);
-	        logger.addHandler(fh);
+	        logFileHandler = new FileHandler(logFilePath);
+	        logger.addHandler(logFileHandler);
 	        SimpleFormatter formatter = new SimpleFormatter();
-	        fh.setFormatter(formatter);
+	        logFileHandler.setFormatter(formatter);
 	        logInfo("===== Worker started =====");
 	    } catch (IOException e) {
 	        e.printStackTrace();
@@ -161,9 +183,10 @@ public class Worker {
 		logInfo("Init credentials and sqs");
 		credentials = new PropertiesCredentials(new FileInputStream(credentialsFilePath));
 		sqs = new AmazonSQSClient(credentials);
-		jobsQueueURL =  sqs.getQueueUrl("JobQueueQueue").getQueueUrl();
+		jobsQueueURL =  sqs.getQueueUrl("JobsQueue").getQueueUrl();
 		managerWorkersQueueURL = sqs.getQueueUrl("ManagerWorkersQueue").getQueueUrl();
 		jobDoneAckQueueURL = sqs.getQueueUrl("jobDoneAckQueue").getQueueUrl();
+		workersStatsQueueURL = sqs.getQueueUrl("WorkersStatsQueue").getQueueUrl();
 		logInfo("start working:");
 		work();
 	}
@@ -183,13 +206,19 @@ public class Worker {
 	        messages = result.getMessages();
 	        
 	        if(messages.isEmpty()){
-	        	logInfo("Didn't found messages");
-	        	shouldWork = false;
+	        	logInfo("Didn't find messages, going to sleep");
+	        	try {
+					Thread.sleep(waitForNewMsgesTime);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
 	        	continue;
 	        }
 	        
 	        Map<String, MessageAttributeValue> msgAttributes;
 	        for(Message message : messages){
+	        	long messageStartTime = System.currentTimeMillis();	        
+				deleteTweetIfLimitExceeded(message);
 	        	String receipt = message.getReceiptHandle();
 	        	
 	        	logInfo("Working on msg:");
@@ -201,29 +230,105 @@ public class Worker {
 	        	String tweetResponse = "";
 	        	try {
 	        		tweetResponse = workOnTweet(tweetURL);
-    			} catch(org.jsoup.HttpStatusException e){
-    				logInfo("Got Google's API Exception " + e.getMessage() + "\nnot deleting msg");
+    			}
+	        	catch(GoogleAPIException | ParseException e){
+    				handleFailedTweet(messageStartTime, e);
+    				sendResponse(localAppUUID, jobDoneAckQueueURL);
+	        		deleteTweetIfLimitExceeded(message);
     				continue;
     			}
-	        	catch (Exception e) {//TODO: handle IO Exception (maybe return msg to jobQueue with higher priority)
-    				logInfo("Got Exception " + e.getMessage());
-					e.printStackTrace();
+	        	catch(BadURLException e){
+	        		handleFailedTweet(messageStartTime, e);
+	        		sendResponse(localAppUUID, jobDoneAckQueueURL);
+	        		deleteMsg(receipt, jobsQueueURL);
+	        		continue;
+	        	}
+	        	catch (IOException e) { // Assume issue with worker, terminate it (return msg to queue).
+	        		handleFailedTweet(messageStartTime, e);
 					shouldWork = false;
-					break;//TODO change to terminate (new func that sends worker stat to manager)
+					break;
 				}
 	        	
 	    		sendResponse(tweetResponse, localAppUUID, responseQueueURL);
-	    		sqs.deleteMessage(new DeleteMessageRequest(jobsQueueURL, receipt));
-	    		
+	    		deleteMsg(receipt, jobsQueueURL);
 	    		sendResponse(localAppUUID, jobDoneAckQueueURL);
+	    		avgRuntimePerSuccessfulMessage = getNewAverage(messageStartTime, true); 
+	    		numOfSuccessfulTweets++;
+	    		
 	        }          	
 		}
 		terminate();
 	}
+	
+	private static double getNewAverage(long messageStartTime, boolean isSuccessful) {
+		int counter = (isSuccessful) ? numOfSuccessfulTweets : numOfFailedTweets;
+		double currentAvg = (isSuccessful) ? avgRuntimePerSuccessfulMessage : avgRuntimePerFailedMessage;
+		long currentRuntime = System.currentTimeMillis() - messageStartTime;
+		if(counter == 0)
+			return currentRuntime;
+		return ((currentAvg * counter) + currentRuntime) / (counter + 1);				
+	}
+
+	private static void handleFailedTweet(long messageStartTime, Exception e) {
+		logInfo(e.getMessage());
+		numOfFailedTweets++;
+		avgRuntimePerFailedMessage = getNewAverage(messageStartTime, false);
+	}
+
+	private static void deleteTweetIfLimitExceeded(Message message) {
+		if(shouldDeleteMsg(message.getAttributes().get("ApproximateReceiveCount"))){
+			logInfo("Receive count limit exceeded. deleting message " + message.getReceiptHandle());
+			deleteMsg(message.getReceiptHandle(), jobsQueueURL);
+		}
+	}
+
+	private static boolean shouldDeleteMsg(String receiveCount) {
+		return Integer.parseInt(receiveCount) > receiveCountLimit;
+	}
+
+	private static void deleteMsg(String receipt, String queueUrl){
+		logInfo("Deleting msg " + receipt);
+		sqs.deleteMessage(new DeleteMessageRequest(queueUrl, receipt));
+	}
+	
 	private static void terminate() {
 		//TODO: finish this func...
+		logInfo("successfull tweets - " + numOfSuccessfulTweets + ", Failed tweets - " + numOfFailedTweets);
 		logInfo("Terminating instance\n"
 				+ "in future - send back the logs and stats...");
+
+		sendStatisticsMessage();
+		uploadLog();   
+	}
+
+	private static void uploadLog() {
+		logInfo("Uploading file to S3");
+		AmazonS3 s3 = new AmazonS3Client(credentials);
+        logInfo("Created Amazon S3 Client");
+        if (!s3.doesBucketExist(bucketName)){
+            s3.createBucket(bucketName);
+        	logInfo("Created bucket.");
+        }
+        logFileHandler.close();
+        File f = new File(logFilePath);
+        PutObjectRequest por = new PutObjectRequest(bucketName, logFileName, f);
+        por.withCannedAcl(CannedAccessControlList.PublicRead);
+        s3.putObject(por);		
+	}
+
+	private static void sendStatisticsMessage() {
+		Map<String, MessageAttributeValue> statsAttributes = new HashMap<String, MessageAttributeValue>();
+		statsAttributes.put("Runtime", new MessageAttributeValue().withDataType("String").withStringValue(calcTotalRuntime() + ""));
+		statsAttributes.put("SuccessfulRuntimePerMessage", new MessageAttributeValue().withDataType("String").withStringValue(avgRuntimePerSuccessfulMessage + ""));
+		statsAttributes.put("FailedRuntimePerMessage", new MessageAttributeValue().withDataType("String").withStringValue(avgRuntimePerFailedMessage + ""));
+		statsAttributes.put("SuccessfulTweets", new MessageAttributeValue().withDataType("String").withStringValue(numOfSuccessfulTweets + ""));
+		statsAttributes.put("FailedTweets", new MessageAttributeValue().withDataType("String").withStringValue(numOfFailedTweets + ""));
+        sqs.sendMessage(new SendMessageRequest().withQueueUrl(workersStatsQueueURL).withMessageBody("New worker stats.").withMessageAttributes(statsAttributes));
+		
+	}
+
+	private static long calcTotalRuntime() {
+		return System.currentTimeMillis() - startTime;
 	}
 
 	private static boolean hasTerminateMsg() {
@@ -243,11 +348,12 @@ public class Worker {
     			new ReceiveMessageRequest()
     			.withQueueUrl(queueURL)
     			.withMessageAttributeNames(tagName)
+    			.withAttributeNames("ApproximateReceiveCount")
     			.withMaxNumberOfMessages(maxMessages)
 	    	  ); 
 	}
 
-	private static String workOnTweet(String tweetURL) throws Exception{
+	private static String workOnTweet(String tweetURL) throws BadURLException, IOException, ParseException, GoogleAPIException{
 		logInfo("Working on tweet url " + tweetURL);
 		JSONObject entities = handleTweet(tweetURL);
 		String result = entities.toJSONString();
@@ -266,7 +372,7 @@ public class Worker {
         sqs.sendMessage(new SendMessageRequest().withQueueUrl(queueURL).withMessageBody("New Result :)").withMessageAttributes(attributes));
 	}
 	
-	private static JSONObject handleTweet(String tweetURL) throws org.json.simple.parser.ParseException, IOException {
+	private static JSONObject handleTweet(String tweetURL) throws BadURLException, IOException, ParseException, GoogleAPIException  {
 		String tweet;
 		JSONObject JsonTweet = new JSONObject();
 
@@ -295,7 +401,7 @@ public class Worker {
 			String jsonResponse= getKnowladge(entity, entities.get(entity).equals("PERSON") ? 1 
 													: (entities.get(entity).equals("ORGANIZATION") ? 2 
 													: (entities.get(entity).equals("LOCATION") ? 3
-													: 0 ));
+													: 0 )));
 			if(jsonResponse == null)
 				continue;
 			
@@ -335,13 +441,20 @@ public class Worker {
 
 	}
 
-	private static String getKnowladge(String entity, int type) throws IOException {
+	private static String getKnowladge(String entity, int type) throws GoogleAPIException{
 		StringBuilder sb = new StringBuilder();
 		sb.append(APIUrl);
 		sb.append(entity);
 		sb.append("&types=");
 		sb.append(KnowladgeAPITypes[type]);
-		Response response = Jsoup.connect(sb.toString()).ignoreContentType(true).execute();
+		String apiQeury = sb.toString();
+		logInfo("Querying google's API - " + apiQeury);
+		Response response;
+		try {
+			response = Jsoup.connect(apiQeury).ignoreContentType(true).execute();
+		} catch (Exception e) {
+			throw new GoogleAPIException(e);
+		}
 		if(response.statusCode() != 200)
 			return null;
 		return response.body();
@@ -349,3 +462,4 @@ public class Worker {
 
 
 }
+

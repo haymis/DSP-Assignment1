@@ -1,11 +1,17 @@
 package Manager;
+import java.io.BufferedWriter;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Vector;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.FileHandler;
@@ -16,20 +22,24 @@ import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.PropertiesCredentials;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
-import com.amazonaws.services.ec2.model.CreateTagsRequest;
 import com.amazonaws.services.ec2.model.DescribeInstancesRequest;
 import com.amazonaws.services.ec2.model.DescribeInstancesResult;
 import com.amazonaws.services.ec2.model.Filter;
-import com.amazonaws.services.ec2.model.Instance;
-import com.amazonaws.services.ec2.model.RunInstancesRequest;
-import com.amazonaws.services.ec2.model.Tag;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.CannedAccessControlList;
+import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.CreateQueueRequest;
+import com.amazonaws.services.sqs.model.DeleteMessageRequest;
+import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.MessageAttributeValue;
+import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
+import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import com.amazonaws.services.sqs.model.SendMessageRequest;
 
 public class Manager {
-	
+	private static UUID uuid = UUID.randomUUID();
 	private static AWSCredentials credentials;
 	private static AmazonEC2 ec2;
 	private static AmazonSQSClient sqs;
@@ -40,26 +50,35 @@ public class Manager {
 	private static ConcurrentHashMap<String, Integer> requiredWorkersPerTask;
 	private static Object talkToTheBossLock;
 	private static AtomicBoolean shouldTerminate;
+	private static AtomicBoolean reducerDone;
+	private static AtomicBoolean mapperDone;
 //	private static String myInstanceID;
 	private static String jobDoneAckQueueURL;
 	private static String managerWorkersQueue;
 	private static String clientsQueueURL;
 	private static String jobsQueueURL;
+	private static String workersStatsQueue;
 	private static int mapperNumOfThreads = 3;
 	private static int reducerNumOfThreads = 3;
 	//private static String credentialsFilePath = "/tmp/rootkey.properties";
 	private static String credentialsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\rootkey.properties";
 	private static String logFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\managerLog.txt"; //"/tmp/managerLog.log";
+	private static String statsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\WorkersStats.txt";
+	private static String logFileName = "managerLog-" + uuid.toString() + ".txt";
+	private static String statsFileName = "WorkersStats-" + uuid.toString() + ".txt";
+	private static FileHandler logFileHandler;
 	static Map<String, MessageAttributeValue> fireWorkerMsg;
+	private static String bucketName = "hayminirhodadi";
 	
 	public static void main(String[] args) {
 		shouldTerminate = new AtomicBoolean(false);
-		FileHandler fh;
+		reducerDone = new AtomicBoolean(false);
+		mapperDone = new AtomicBoolean(false);		
         try {
-            fh = new FileHandler(logFilePath);
-            logger.addHandler(fh);
+            logFileHandler = new FileHandler(logFilePath);
+            logger.addHandler(logFileHandler);
             SimpleFormatter formatter = new SimpleFormatter();
-            fh.setFormatter(formatter);
+            logFileHandler.setFormatter(formatter);
             logger.info("===== Manager started =====");
         } catch (IOException e) {
             e.printStackTrace();
@@ -83,9 +102,10 @@ public class Manager {
 //        jobDoneAckQueue = sqs.createQueue(new CreateQueueRequest("JobDoneAckQueue")).getQueueUrl();
         Runnable mapper = new Mapper(jobsQueueURL, clientsQueueURL, requiredWorkersPerTask,
         		clientsUUIDToURLLeft, sqs, ec2, shouldTerminate, mapperNumOfThreads,
-        		logger, credentials, talkToTheBossLock);
+        		logger, credentials, talkToTheBossLock, mapperDone);
         Runnable reducer = new Reducer(jobDoneAckQueueURL, clientsUUIDToURLLeft, sqs,
-        		shouldTerminate, reducerNumOfThreads, logger, credentials, talkToTheBossLock, requiredWorkersPerTask);
+        		shouldTerminate, reducerNumOfThreads, logger, credentials, talkToTheBossLock,
+        		requiredWorkersPerTask, mapperDone, reducerDone);
         
         Thread mapperThread = new Thread(mapper);
         Thread reducerThread = new Thread(reducer);
@@ -93,7 +113,7 @@ public class Manager {
         mapperThread.start();
         reducerThread.start();
         
-        while(!shouldTerminate.get()){
+        while(!reducerDone.get() || !mapperDone.get()){
         	synchronized(talkToTheBossLock){
             	try {
             		logInfo("SLEEPING ON LOCK!");
@@ -105,9 +125,109 @@ public class Manager {
             	manage();
             }
         }
-//        terminateServer();
+        terminate();
     }
 		
+	private static void terminate() {
+		logInfo("Starting termination...");
+		int numOfRequiredWorkers = getNumOfRequiredWorkers();
+		if(numOfRequiredWorkers != 0) {
+			logInfo("Error in termination - required " + numOfRequiredWorkers + " workers. \n"
+					+ "Terminating them now - check that all workers are really terminated!");
+			fireWorkers(numOfRequiredWorkers);
+		}
+		summarizeStats();
+		uploadLogAndStats();
+	}
+
+	private static void summarizeStats() {
+		long totalRuntime = 0;
+		double SuccessfulRuntimePerMessage = 0;
+		double FailedRuntimePerMessage = 0;
+		int successfulTweets = 0;
+		int failedTweets = 0;
+		int numOfWorkers = 0;
+		ReceiveMessageResult result ;
+        List<Message> messages ;
+	    do
+        {
+            result = sqs.receiveMessage(
+            			new ReceiveMessageRequest()
+            			.withQueueUrl(workersStatsQueue)
+            			.withMessageAttributeNames("All")
+            		);	            
+            
+            messages = result.getMessages();
+	        logInfo("Stats messages arrived...");
+
+	        for (Message message: messages) {		        	
+	            String receipt = message.getReceiptHandle();
+	            Map<String, MessageAttributeValue> statsAttributes = message.getMessageAttributes();
+	            totalRuntime += Long.parseLong(statsAttributes.get("Runtime").getStringValue());
+	            successfulTweets += Integer.parseInt(statsAttributes.get("SuccessfulTweets").getStringValue());
+	            failedTweets += Integer.parseInt(statsAttributes.get("FailedTweets").getStringValue());
+	            SuccessfulRuntimePerMessage = getNewAverage(numOfWorkers, SuccessfulRuntimePerMessage, 
+	            		statsAttributes.get("SuccessfulRuntimePerMessage").getStringValue());
+	            FailedRuntimePerMessage = getNewAverage(numOfWorkers, FailedRuntimePerMessage,
+	            		statsAttributes.get("FailedRuntimePerMessage").getStringValue());		    				    	
+	    		numOfWorkers++;
+	    		sqs.deleteMessage(new DeleteMessageRequest(workersStatsQueue, receipt));
+	        }
+        } while (!messages.isEmpty());
+		
+	    logInfo("Done Calculating Stats");
+	    double avgTotalRuntime = totalRuntime / numOfWorkers; 
+	    writeStatsToFile(avgTotalRuntime, successfulTweets, failedTweets, FailedRuntimePerMessage, SuccessfulRuntimePerMessage);
+	}
+	
+	private static void writeStatsToFile(double avgTotalRuntime, int successfulTweets,
+			int failedTweets, double FailedRuntimePerMessage, double SuccessfulRuntimePerMessage) {
+		Charset charset = Charset.forName("US-ASCII");
+		String stats = "WORKERS STATS:\n--------------\n\n"
+						+ "Average Runtime Of A Worker - " + avgTotalRuntime + "\n"
+						+ "Total Successful Tweets - " + successfulTweets + "\n"
+						+ "Total Failed Tweets - " + failedTweets + "\n"
+						+ "Average Failed Runtime Per Message - " + FailedRuntimePerMessage + "\n"
+						+ "Average Successful Runtime Per Message - " + SuccessfulRuntimePerMessage + "\n";
+		
+		
+		try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(statsFilePath), charset)) {
+		    writer.write(stats, 0, stats.length());
+		} catch (IOException e) {
+		    logInfo("Error while writin stats - " + e.getMessage());
+		}
+	}
+
+	private static double getNewAverage(int counter, double currentAvg, String currentAvgRuntimeString) {		
+		double currentAvgRuntime = Double.parseDouble(currentAvgRuntimeString);
+		if(counter == 0)
+			return currentAvgRuntime;
+		return ((currentAvg * counter) + currentAvgRuntime) / (counter + 1);				
+	}
+	
+	private static void uploadLogAndStats() {
+		logInfo("Uploading file to S3");
+		AmazonS3 s3 = new AmazonS3Client(credentials);
+        logInfo("Created Amazon S3 Client");
+        if (!s3.doesBucketExist(bucketName)){
+            s3.createBucket(bucketName);
+        	logInfo("Created bucket.");
+        }
+        logFileHandler.close();
+        
+        // Upload log file
+        File f = new File(logFilePath);
+        PutObjectRequest por = new PutObjectRequest(bucketName, logFileName, f);
+        por.withCannedAcl(CannedAccessControlList.PublicRead);
+        s3.putObject(por);
+        
+        // Upload stats file
+        f = new File(statsFilePath);
+        por = new PutObjectRequest(bucketName, statsFileName, f);
+        por.withCannedAcl(CannedAccessControlList.PublicRead);
+        s3.putObject(por);
+	}
+
 	private static void manage(){
 		logInfo("Managing");
 		ec2 = new AmazonEC2Client(credentials);
@@ -177,9 +297,10 @@ public class Manager {
         logger.info("[MANAGER] - Starting to init queues");
         sqs = new AmazonSQSClient(credentials);
         clientsQueueURL = sqs.getQueueUrl("ClientsQueue").getQueueUrl();
-        jobsQueueURL = sqs.createQueue(new CreateQueueRequest("JobQueueQueue")).getQueueUrl();
+        jobsQueueURL = sqs.createQueue(new CreateQueueRequest("JobsQueue")).getQueueUrl();
         jobDoneAckQueueURL = sqs.createQueue(new CreateQueueRequest("jobDoneAckQueue")).getQueueUrl();
         managerWorkersQueue = sqs.createQueue(new CreateQueueRequest("ManagerWorkersQueue")).getQueueUrl();
+        workersStatsQueue = sqs.createQueue(new CreateQueueRequest("WorkersStatsQueue")).getQueueUrl();
         logger.info("[MANAGER] - Queues initialized");
     }
     
@@ -187,5 +308,3 @@ public class Manager {
     	logger.info("[MANAGER] - " + msg);
     }
 }
-
-

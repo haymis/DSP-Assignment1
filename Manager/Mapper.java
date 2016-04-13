@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
@@ -30,11 +31,12 @@ public class Mapper implements Runnable{
 	private AWSCredentials credentials;
 	private int sleepTime = 10*1000;
 	private Object talkToTheBossLock;
+	private AtomicBoolean mapperDone;
 
 	public Mapper(String jobsQueueURL, String clientsQueueURL,
 			ConcurrentHashMap<String, Integer> requiredWorkersPerTask,
 			ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft, AmazonSQSClient sqs, AmazonEC2 ec2, AtomicBoolean shouldTerminate, 
-			int numOfThreads, Logger logger, AWSCredentials credentials, Object talkToTheBossLock) {
+			int numOfThreads, Logger logger, AWSCredentials credentials, Object talkToTheBossLock, AtomicBoolean mapperDone) {
 		this.jobsQueueURL = jobsQueueURL;
 		this.clientsQueueURL = clientsQueueURL;
 		this.clientsUUIDToURLLeft = clientsUUIDToURLLeft;
@@ -46,6 +48,7 @@ public class Mapper implements Runnable{
 		this.credentials = credentials;
 		this.talkToTheBossLock = talkToTheBossLock;
 		this.requiredWorkersPerTask = requiredWorkersPerTask;
+		this.mapperDone = mapperDone;
 		logger.info("[MAPPER] - Mapper Started");
 	}
 
@@ -74,7 +77,7 @@ public class Mapper implements Runnable{
 
 	        } while (messages.isEmpty());
 
-	        messages = result.getMessages();
+	        // messages = result.getMessages();
 	        logger.info("[MAPPER] - New messages arrived from local app! Handling");
 
 	        for (Message message: messages) {
@@ -86,18 +89,36 @@ public class Mapper implements Runnable{
 	                handleNewTask(msgAttributes);
 	                sqs.deleteMessage(new DeleteMessageRequest(clientsQueueURL, receipt));
 	            }
-//	            else if (msgAttributes.containsKey("Terminate")) {
-//	                myInstanceID = msgAttributes.get("Manager-ID").getStringValue();
-//	                terminateManager();
-//	            }
+	            if (msgAttributes.containsKey("Terminate")) {	                
+	                shouldTerminate.set(true);
+	                break;
+	            }
 	        }
 		}
+		terminate();
 	}
 	
 //		msgAttributes.containsKey("uuid")) {
 //	clientsUUIDToURLLeft.put(msgAttributes.get("uuid").getStringValue(), 
 //			Integer.parseInt(msgAttributes.get("Num-of-URLs").getStringValue()));
 	
+	private void terminate() {
+		mapperExecutor.shutdown();
+		try {
+			while (!mapperExecutor.awaitTermination(60, TimeUnit.SECONDS))
+				logger.info("[MAPPER] - Awaiting completion of mapper tasks.");
+			
+		} catch (InterruptedException e) {
+			logger.info("[MAPPER] - Got interrupted while waiting for tasks to complete. shutting down :(");
+			e.printStackTrace();
+		}
+		logger.info("[MAPPER] - Done waiting. Exiting...");
+		mapperDone.set(true);
+		synchronized(talkToTheBossLock){
+			talkToTheBossLock.notifyAll();
+		}
+	}
+
 	private void handleNewTask(Map<String, MessageAttributeValue> msgAtrributes) {
 
         logger.info("[MAPPER] - Starting to handle new task from local app");

@@ -1,4 +1,4 @@
-package ass1;
+package LocalApp;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -94,6 +94,11 @@ public class LocalApplication {
 		sendMessageToSQS();
 		Message response = waitForResponse();
 		handleResponse(response);
+		deleteQueues();
+	}
+	
+	private static void deleteQueues() {		       
+		sqs.deleteQueue("Request-" + uuid.toString());
 	}
 	
 	private static void handleResponse(Message response) {
@@ -167,11 +172,13 @@ public class LocalApplication {
         attributes.put("UUID", new MessageAttributeValue().withDataType("String").withStringValue(String.valueOf(uuid)));
         attributes.put("WorkerPerMessage", new MessageAttributeValue().withDataType("Number").withStringValue(String.valueOf(WorkerRatio)));
         attributes.put("NumOfURLs", new MessageAttributeValue().withDataType("Number").withStringValue(String.valueOf(tweetsAmount())));
-
+        //terminate = true;
+        if(terminate)
+        	attributes.put("Terminate", new MessageAttributeValue().withDataType("String").withStringValue("true"));
         //Creating the Manager-LocalApp Queue
         CreateQueueRequest createQueueRequest = new CreateQueueRequest().withQueueName("ClientsQueue");
-        infoQueueURL = sqs.createQueue(createQueueRequest).getQueueUrl();
-
+        createClientsQueue(createQueueRequest);
+        
         System.out.println("ClientsQueue created ");
 
         //Creating the unique LocalApp Queue
@@ -200,6 +207,21 @@ public class LocalApplication {
 
     }
 	
+	private static void createClientsQueue(CreateQueueRequest createQueueRequest) {
+		try {
+        	infoQueueURL = sqs.createQueue(createQueueRequest).getQueueUrl();
+        }
+        catch (com.amazonaws.services.sqs.model.QueueDeletedRecentlyException e){
+        	System.out.println("Exception - " + e.getMessage() + "\nSleeping for a minute");
+        	try {
+				Thread.sleep(61 * 1000); //sleep for a minute
+			} catch (InterruptedException e1) {
+				System.out.println("Got interrupted while sleeping ( " + e1.getMessage() + ")..\nTrying again");
+			}
+        	createClientsQueue(createQueueRequest);
+        }
+	}
+
 	private static int tweetsAmount() {
 		int result = 0;
 	    try {
@@ -340,4 +362,3 @@ public class LocalApplication {
 		return InstanceStatesDictionary.instanceStatesDictionary.get(key);
 	}
 }
-

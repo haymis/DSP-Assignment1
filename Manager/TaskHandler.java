@@ -48,7 +48,8 @@ public class TaskHandler implements Runnable {
 	
 	public TaskHandler(ConcurrentHashMap<String, Integer> clientsUUIDToURLLeft,
 			Map<String, MessageAttributeValue> msgAtrributes, Logger logger, AmazonSQSClient sqs,
-			AWSCredentials credentials, String jobsQueueUrl, ConcurrentHashMap<String, Integer> requiredWorkersPerTask, Object talkToTheBossLock){
+			AWSCredentials credentials, String jobsQueueUrl, 
+			ConcurrentHashMap<String, Integer> requiredWorkersPerTask, Object talkToTheBossLock){
 		this.clientsUUIDToURLLeft = clientsUUIDToURLLeft;
 		this.msgAttributes = msgAtrributes;
         this.logger = logger;
@@ -77,7 +78,6 @@ public class TaskHandler implements Runnable {
 		if(workersRatio == 0)
 			workersRatio = 30;  
 		int numOfWorkers = numOfMessages / workersRatio;
-				
 		this.requiredWorkersPerTask.put(localAppUUID, numOfWorkers);
 		synchronized(talkToTheBossLock){
 			talkToTheBossLock.notifyAll();
@@ -90,24 +90,22 @@ public class TaskHandler implements Runnable {
 		} catch (IOException e) {
 			logger.info("[MapperTask] - couldn't read from file.");
 			e.printStackTrace();
-		}		
+		}	
 	}
-
+	
 	private void createWorkers(int numOfWorkers) {
 		// Calculate num of workers to add.
-		
-		
-        int absoluteToAdd = Integer.min(numOfWorkers - getNumOfCurrentWorkers(), MAX_WORKERS);
+		int absoluteToAdd = Integer.min(numOfWorkers - getNumOfCurrentWorkers(), MAX_WORKERS);
         if (absoluteToAdd <= 0) { // have enough workers.
         	logger.info("[MAPPER Task] - No more workers needed.");
-            return;
+        	return;
         }
-        logInfo("Creating " + absoluteToAdd + " new workers");
-        WorkerInstanceData.getWorkers(absoluteToAdd, ec2);
-        
-        logger.info("[MAPPER Task] - Workers added.");
-		
+		logInfo("Creating " + absoluteToAdd + " new workers");
+		WorkerInstanceData.getWorkers(absoluteToAdd, ec2);
+	    logger.info("[MAPPER Task] - Workers added.");
 	}
+        	
+        
 	
 	private int getNumOfCurrentWorkers()
     {	
@@ -125,16 +123,16 @@ public class TaskHandler implements Runnable {
         	numOfCurrentWorkers += result.getReservations().get(i).getInstances().size();
         }
         logInfo("numOfCurrentWorkers - " + numOfCurrentWorkers);
-        
         return numOfCurrentWorkers; 
     }
-
+	
 	private void downloadInputFileFromS3(String bucketName, String inputFilePath, String localAppUUID) throws IOException {
 
         logInfo("Downloading input file");
         AmazonS3 s3 = new AmazonS3Client(credentials);
         S3Object inputFile = s3.getObject(new GetObjectRequest(bucketName, inputFilePath));
         
+
         InputStream inputFileData = inputFile.getObjectContent();
         logInfo("Done Downloading input file");
 
@@ -152,19 +150,14 @@ public class TaskHandler implements Runnable {
         inputFileData.close();
     }
 	
-    private void sendJobToWorkers(String url, int urlNumber, String localAppUUID) {
-
-        //logger.info("Task Handler :: Sending job #"+urlNumber);
-
-        Map<String, MessageAttributeValue> attributes = new HashMap<String, MessageAttributeValue>();
-
-        attributes.put("Url", new MessageAttributeValue().withDataType("String").withStringValue(url));      
-        attributes.put("UUID", new MessageAttributeValue().withDataType("String").withStringValue(localAppUUID));
-
-        sqs.sendMessage(new SendMessageRequest().withQueueUrl(jobsQueueURL).withMessageBody("New URL. Please process").withMessageAttributes(attributes));
-
-        //logger.info("Task Handler :: Sent job #"+urlNumber);
+	 private void sendJobToWorkers(String url, int urlNumber, String localAppUUID) {
+		 //logInfo("Sending job #" + urlNumber);
+		 Map<String, MessageAttributeValue> attributes = new HashMap<String, MessageAttributeValue>();
+		 sqs.sendMessage(new SendMessageRequest()
+		 			.withQueueUrl(jobsQueueURL)
+		 			.withMessageBody("New URL. Please process")
+		 			.withMessageAttributes(attributes));
+		 //logInfo("Sent job #" + urlNumber);
     }
-	
 }
 
