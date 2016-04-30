@@ -1,6 +1,7 @@
 package LocalApp;
+import Util.InstanceState;
+
 import java.util.HashMap;
-import java.util.Map;
 
 
 public class InstanceStatesDictionary {

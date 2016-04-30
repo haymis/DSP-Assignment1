@@ -4,24 +4,16 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.PrintWriter;
-import java.io.UnsupportedEncodingException;
-import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
+import Util.InstanceState;
 import org.apache.commons.codec.binary.Base64;
-import org.aspectj.weaver.patterns.PatternParser;
 
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.PropertiesCredentials;
@@ -52,6 +44,8 @@ import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import com.amazonaws.services.sqs.model.SendMessageRequest;
 
+import static Util.Const.bucketName;
+
 
 public class LocalApplication {
 
@@ -67,7 +61,6 @@ public class LocalApplication {
     private static String managerInstanceId;
     private static AmazonEC2 ec2;
     private static AmazonS3 s3;
-    private static String bucketName = "hayminirhodadi";
     private static AWSCredentials credentials;
     private static AmazonSQSClient sqs;
 	private static String infoQueueURL;
@@ -75,12 +68,16 @@ public class LocalApplication {
 	private static String jobsQueueURL;
 	private static String s3Path = "https://%s.s3.amazonaws.com/%s";
 	private static long sleepTime = 20 * 1000;
-	
+
 	public static void main(String[] args){
-		WorkerRatio = 100;
-		tweetsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\tweetLinks1.txt";
-		tweetsHtmlPath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\ParsedTweets.html";
-		//tweetsHtmlPath = args[1];
+//		WorkerRatio = 100;
+//		tweetsFilePath = "tweetLinks1.txt";
+//		tweetsHtmlPath = "ParsedTweets.html";
+		tweetsFilePath = args[1];
+		tweetsHtmlPath = args[2];
+		WorkerRatio = Integer.parseInt(args[2]);
+		terminate = args[4].equals("terminate");
+
 		uuid = UUID.randomUUID();
 		try {
 			initEC2();
@@ -147,7 +144,7 @@ public class LocalApplication {
             if (messages.isEmpty()) {
             	System.out.println("Waiting for my response, sleeping "+ (sleepTime / 1000) +" second");
 	            try {
-	                Thread.sleep(sleepTime );
+	                Thread.sleep(sleepTime);
 	            } catch (InterruptedException e) {
 	                e.printStackTrace();
 	            }
@@ -263,7 +260,7 @@ public class LocalApplication {
 	}
 
 	private static void initEC2() throws FileNotFoundException, IOException {
-		credentials = new PropertiesCredentials(new FileInputStream("C:\\Users\\Haymi\\Documents\\BGU\\DSP\\rootkey.properties"));
+		credentials = new PropertiesCredentials(new FileInputStream(Util.Const.credentialsFilePath));
         ec2 = new AmazonEC2Client(credentials);        
     }
 
@@ -282,10 +279,11 @@ public class LocalApplication {
             }
         }
         else { // Manager doesn't exist.
-            RunInstancesRequest runManagerRequest = new RunInstancesRequest("ami-b66ed3de", 1, 1);
+
+			RunInstancesRequest runManagerRequest = new RunInstancesRequest(Util.Const.ami, 1, 1);
             runManagerRequest.setInstanceType(InstanceType.T2Micro.toString());
-            //runManagerRequest.setUserData(fileToBase64String("C:\\Users\\Haymi\\Documents\\BGU\\DSP\\bootstart.sh"));
-            runManagerRequest.setKeyName("nirhaymi");
+			runManagerRequest.setUserData(Util.Util.Base64BootstartBuilder("Manager", "", "Manager.Manager"));
+			runManagerRequest.setKeyName("nirhaymi");
             managerInstance = ec2.runInstances(runManagerRequest).getReservation().getInstances().get(0);
             managerInstanceId = managerInstance.getInstanceId();
             CreateTagsRequest createTagsRequest = new CreateTagsRequest()
@@ -335,7 +333,7 @@ public class LocalApplication {
 		}
 	}
 
-	private static String fileToBase64String(String path) {
+	public static String fileToBase64String(String path) {
 		StringBuilder sb = new StringBuilder();
 		String line = null;
 	    try {

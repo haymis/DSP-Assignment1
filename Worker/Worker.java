@@ -49,19 +49,20 @@ import edu.stanford.nlp.sentiment.SentimentCoreAnnotations;
 import edu.stanford.nlp.trees.Tree;
 import edu.stanford.nlp.util.CoreMap;
 
-public class Worker {
+import static Util.Const.bucketName;
 
+public class Worker {
 	public static String[] tweets = { "https://www.twitter.com/BarackObama/status/710517154987122689"};
-	private static String APIUrl = "https://kgsearch.googleapis.com/v1/entities:search?key=AIzaSyBA0QFiW2iZtNmhrwf-YRRQSVimKA8Y8G8&limit=1&query=";
+	private static String APIUrl = "https://kgsearch.googleapis.com/v1/entities:search?key=" +
+									"AIzaSyBA0QFiW2iZtNmhrwf-YRRQSVimKA8Y8G8&limit=1&query=";
 	static StanfordCoreNLP sentimentPipeline;
 	static StanfordCoreNLP EntitiesPipeline;
 	private static UUID uuid = UUID.randomUUID();
 	private static AmazonSQSClient sqs;
 	private static AWSCredentials credentials;
 	private static Logger logger = Logger.getLogger("Worker Logger");
-	private static String logFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\workerlog"+uuid.toString()+".txt";//"/tmp/workerLog.txt"\
-	private static String logFileName = "workerlog"+uuid.toString()+".txt";
-	private static String credentialsFilePath = "C:\\Users\\Haymi\\Documents\\BGU\\DSP\\rootkey.properties"; 
+	private static String logFilePath = "/tmp/log/workerlog"+uuid.toString()+".txt";//"/tmp/workerLog.txt"\
+	private static String logFileName = "/tmp/log/workerlog"+uuid.toString()+".txt";
 	private static String jobsQueueURL;
 	private static String managerWorkersQueueURL;
 	private static String jobDoneAckQueueURL;
@@ -74,7 +75,6 @@ public class Worker {
 	private static long startTime = 0;
 	private static double avgRuntimePerSuccessfulMessage = 0;
 	private static double avgRuntimePerFailedMessage = 0;
-	private static String bucketName = "hayminirhodadi";
 	private static FileHandler logFileHandler;
 	/*
 	 * returns the tweet fetched from the given url
@@ -85,8 +85,14 @@ public class Worker {
 			doc = Jsoup.connect(url).get();
 		} catch (IOException e) {
 			throw new BadURLException(e);
-		}
-		return doc.title().split("\"")[1];
+        }
+
+        if (!doc.title().contains("on Twitter:"))
+        {
+            throw new BadURLException(new Exception("Bad Tweet!" + doc.title()));
+        }
+
+        return doc.title().split("\"")[1];
 	}
 
 	/*
@@ -138,7 +144,7 @@ public class Worker {
 		if (tweet != null && tweet.length() > 0) {
 			int longest = 0;
 			Annotation annotation = sentimentPipeline.process(tweet);
-			for (CoreMap sentence : annotation.get(CoreAnnotations.SentencesAnnotation.class)) {
+			for (CoreMap sentence : annotation.get(SentencesAnnotation.class)) {
 				Tree tree = sentence.get(SentimentCoreAnnotations.AnnotatedTree.class);
 				int sentiment = RNNCoreAnnotations.getPredictedClass(tree);
 				String partText = sentence.toString();
@@ -181,7 +187,7 @@ public class Worker {
 		EntitiesPipeline = new StanfordCoreNLP(EntProps);
 
 		logInfo("Init credentials and sqs");
-		credentials = new PropertiesCredentials(new FileInputStream(credentialsFilePath));
+		credentials = new PropertiesCredentials(new FileInputStream(Util.Const.credentialsFilePath));
 		sqs = new AmazonSQSClient(credentials);
 		jobsQueueURL =  sqs.getQueueUrl("JobsQueue").getQueueUrl();
 		managerWorkersQueueURL = sqs.getQueueUrl("ManagerWorkersQueue").getQueueUrl();
@@ -309,7 +315,8 @@ public class Worker {
             s3.createBucket(bucketName);
         	logInfo("Created bucket.");
         }
-        logFileHandler.close();
+        if (logFileHandler != null)
+            logFileHandler.close();
         File f = new File(logFilePath);
         PutObjectRequest por = new PutObjectRequest(bucketName, logFileName, f);
         por.withCannedAcl(CannedAccessControlList.PublicRead);
@@ -396,9 +403,7 @@ public class Worker {
 		for (String entity : entities.keySet()) {
 			JSONObject JsonEntity = new JSONObject();
 
-			String desc = null;
-			String wikiUrl = null;
-			String jsonResponse= getKnowladge(entity, entities.get(entity).equals("PERSON") ? 1 
+			String jsonResponse= getKnowladge(entity, entities.get(entity).equals("PERSON") ? 1
 													: (entities.get(entity).equals("ORGANIZATION") ? 2 
 													: (entities.get(entity).equals("LOCATION") ? 3
 													: 0 )));
