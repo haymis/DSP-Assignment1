@@ -95,7 +95,7 @@ public class TaskHandler implements Runnable {
 	
 	private void createWorkers(int numOfWorkers) {
 		// Calculate num of workers to add.
-		int absoluteToAdd = Integer.min(numOfWorkers - getNumOfCurrentWorkers(), MAX_WORKERS);
+		int absoluteToAdd = Math.min(numOfWorkers - getNumOfCurrentWorkers(), MAX_WORKERS);
         if (absoluteToAdd <= 0) { // have enough workers.
         	logger.info("[MAPPER Task] - No more workers needed.");
         	return;
